@@ -1,142 +1,150 @@
-"""llm-prompt-tag: Tag prompt sections with named labels and metadata."""
+"""
+llm-prompt-tag: Tag prompt sections with labels and metadata; render with markers.
+"""
+from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 
-@dataclass(frozen=True)
-class PromptTag:
-    """Metadata label attached to a prompt section."""
+@dataclass
+class PromptSection:
+    label: str
+    content: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+    enabled: bool = True
+    priority: int = 0
 
-    name: str
-    version: str | None = None
-    cache_hint: bool = False
-    metadata: dict = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class TaggedPrompt:
-    """A prompt text with an associated PromptTag."""
-
-    text: str
-    tag: PromptTag
-
-
-class PromptTagger:
-    """Create, render, compose, and parse tagged prompt sections."""
-
-    def tag(
-        self,
-        text: str,
-        name: str,
-        version: str | None = None,
-        cache_hint: bool = False,
-        **metadata: Any,
-    ) -> TaggedPrompt:
-        """Create a TaggedPrompt from text and tag parameters."""
-        return TaggedPrompt(
-            text=text,
-            tag=PromptTag(name=name, version=version, cache_hint=cache_hint, metadata=metadata),
-        )
-
-    def render(self, tagged: TaggedPrompt) -> str:
-        """Return the prompt text unchanged (tags are metadata-only)."""
-        return tagged.text
-
-    def render_with_markers(self, tagged: TaggedPrompt) -> str:
-        """Wrap text in HTML-comment markers encoding the tag name and version.
-
-        Format with version:    <!-- tag:name v:version -->text<!-- /tag:name -->
-        Format without version: <!-- tag:name -->text<!-- /tag:name -->
-        """
-        name = tagged.tag.name
-        version = tagged.tag.version
-        if version is not None:
-            open_marker = f"<!-- tag:{name} v:{version} -->"
-        else:
-            open_marker = f"<!-- tag:{name} -->"
-        close_marker = f"<!-- /tag:{name} -->"
-        return f"{open_marker}{tagged.text}{close_marker}"
-
-    def strip_markers(self, text: str) -> str:
-        """Remove all <!-- tag:... --> and <!-- /tag:... --> HTML comment markers."""
-        # Remove opening markers (with or without version)
-        text = re.sub(r"<!-- tag:[^>]+ -->", "", text)
-        # Remove closing markers
-        text = re.sub(r"<!-- /tag:[^>]+ -->", "", text)
+    def render(self, variables: Optional[dict[str, Any]] = None) -> str:
+        text = self.content
+        if variables:
+            try:
+                text = text.format_map(variables)
+            except KeyError:
+                pass
         return text
 
-    def extract_tags(self, text: str) -> list[tuple[str, str]]:
-        """Find all marked sections and return [(tag_name, content), ...].
+    def render_with_markers(self, variables: Optional[dict[str, Any]] = None) -> str:
+        text = self.render(variables)
+        return f"<{self.label}>\n{text}\n</{self.label}>"
 
-        Content is the text between opening and closing markers.
-        Handles both versioned and unversioned opening markers.
-        """
-        # Match <!-- tag:NAME --> or <!-- tag:NAME v:VER --> ... <!-- /tag:NAME -->
-        pattern = re.compile(
-            r"<!-- tag:(\w[\w.-]*?)(?:\s+v:[^>]*)? -->(.+?)<!-- /tag:\1 -->",
-            re.DOTALL,
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "content": self.content,
+            "metadata": self.metadata,
+            "enabled": self.enabled,
+            "priority": self.priority,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "PromptSection":
+        return cls(
+            label=d["label"],
+            content=d["content"],
+            metadata=d.get("metadata", {}),
+            enabled=d.get("enabled", True),
+            priority=d.get("priority", 0),
         )
-        return [(m.group(1), m.group(2)) for m in pattern.finditer(text)]
-
-    def compose(self, *tagged: TaggedPrompt, separator: str = "\n\n") -> str:
-        """Render each TaggedPrompt and join with separator, skipping empty text."""
-        parts = [self.render(t) for t in tagged if t.text]
-        return separator.join(parts)
 
 
-# ---------------------------------------------------------------------------
-# Module-level convenience functions
-# ---------------------------------------------------------------------------
+class TaggedPrompt:
+    """
+    Compose a prompt from labeled, tagged sections.
 
-_tagger = PromptTagger()
+    Usage::
+
+        p = TaggedPrompt()
+        p.add("persona", "You are a helpful coding assistant.")
+        p.add("context", "The user is working on {language}.")
+        p.add("instructions", "Answer briefly.", priority=10)
+
+        text = p.render(variables={"language": "Python"})
+        # returns sections joined by separator, sorted by priority desc
+    """
+
+    def __init__(self, separator: str = "\n\n") -> None:
+        self._sections: dict[str, PromptSection] = {}
+        self._separator = separator
+
+    def add(
+        self,
+        label: str,
+        content: str,
+        priority: int = 0,
+        enabled: bool = True,
+        **metadata: Any,
+    ) -> "TaggedPrompt":
+        self._sections[label] = PromptSection(
+            label=label, content=content, metadata=metadata, enabled=enabled, priority=priority
+        )
+        return self
+
+    def update(self, label: str, content: str) -> "TaggedPrompt":
+        if label in self._sections:
+            self._sections[label].content = content
+        else:
+            self.add(label, content)
+        return self
+
+    def enable(self, label: str) -> "TaggedPrompt":
+        if label in self._sections:
+            self._sections[label].enabled = True
+        return self
+
+    def disable(self, label: str) -> "TaggedPrompt":
+        if label in self._sections:
+            self._sections[label].enabled = False
+        return self
+
+    def remove(self, label: str) -> "TaggedPrompt":
+        self._sections.pop(label, None)
+        return self
+
+    def get(self, label: str) -> Optional[PromptSection]:
+        return self._sections.get(label)
+
+    def labels(self) -> list[str]:
+        return list(self._sections.keys())
+
+    def _active_sorted(self) -> list[PromptSection]:
+        active = [s for s in self._sections.values() if s.enabled]
+        return sorted(active, key=lambda s: s.priority, reverse=True)
+
+    def render(self, variables: Optional[dict[str, Any]] = None) -> str:
+        parts = [s.render(variables) for s in self._active_sorted()]
+        return self._separator.join(parts)
+
+    def render_with_markers(self, variables: Optional[dict[str, Any]] = None) -> str:
+        parts = [s.render_with_markers(variables) for s in self._active_sorted()]
+        return self._separator.join(parts)
+
+    def as_message(
+        self,
+        role: str = "system",
+        variables: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        return {"role": role, "content": self.render(variables)}
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"sections": [s.to_dict() for s in self._sections.values()], "separator": self._separator}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "TaggedPrompt":
+        p = cls(separator=d.get("separator", "\n\n"))
+        for sec in d.get("sections", []):
+            s = PromptSection.from_dict(sec)
+            p._sections[s.label] = s
+        return p
+
+    def clone(self) -> "TaggedPrompt":
+        return TaggedPrompt.from_dict(self.to_dict())
+
+    def __len__(self) -> int:
+        return len(self._sections)
+
+    def __contains__(self, label: str) -> bool:
+        return label in self._sections
 
 
-def tag(
-    text: str,
-    name: str,
-    version: str | None = None,
-    cache_hint: bool = False,
-    **metadata: Any,
-) -> TaggedPrompt:
-    """Convenience wrapper: PromptTagger().tag(...)"""
-    return _tagger.tag(text, name, version=version, cache_hint=cache_hint, **metadata)
-
-
-def compose(*tagged: TaggedPrompt, separator: str = "\n\n") -> str:
-    """Convenience wrapper: PromptTagger().compose(...)"""
-    return _tagger.compose(*tagged, separator=separator)
-
-
-def to_dict(tagged: TaggedPrompt) -> dict:
-    """Serialize a TaggedPrompt to a plain dict for JSON storage."""
-    return {
-        "text": tagged.text,
-        "name": tagged.tag.name,
-        "version": tagged.tag.version,
-        "cache_hint": tagged.tag.cache_hint,
-        "metadata": dict(tagged.tag.metadata),
-    }
-
-
-def from_dict(d: dict) -> TaggedPrompt:
-    """Deserialize a TaggedPrompt from a plain dict."""
-    pt = PromptTag(
-        name=d["name"],
-        version=d.get("version"),
-        cache_hint=d.get("cache_hint", False),
-        metadata=d.get("metadata", {}),
-    )
-    return TaggedPrompt(text=d["text"], tag=pt)
-
-
-__all__ = [
-    "PromptTag",
-    "TaggedPrompt",
-    "PromptTagger",
-    "tag",
-    "compose",
-    "to_dict",
-    "from_dict",
-]
+__all__ = ["TaggedPrompt", "PromptSection"]
