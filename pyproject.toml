@@ -23,8 +23,16 @@ dev = [
     "ruff>=0.4",
 ]
 
+[project.urls]
+Homepage = "https://github.com/MukundaKatta/llm-prompt-tag"
+Repository = "https://github.com/MukundaKatta/llm-prompt-tag"
+Issues = "https://github.com/MukundaKatta/llm-prompt-tag/issues"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+llm_prompt_tag = ["py.typed"]
 
 [tool.ruff]
 line-length = 100
