@@ -5,7 +5,45 @@ llm-prompt-tag: Tag prompt sections with labels and metadata; render with marker
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from string import Formatter
 from typing import Any, Optional
+
+__version__ = "0.1.0"
+
+
+class _SafeFormatter(Formatter):
+    """A ``string.Formatter`` that tolerates missing keys.
+
+    Unlike ``str.format_map``, this substitutes every placeholder it *can*
+    resolve and leaves placeholders whose key is missing untouched (rendered
+    back as ``{key}``). This means a single missing variable no longer discards
+    substitution for the whole string, and it never raises ``KeyError`` /
+    ``IndexError`` for unknown fields.
+    """
+
+    def get_value(self, key: Any, args: Any, kwargs: Any) -> Any:
+        if isinstance(key, str):
+            if key in kwargs:
+                return kwargs[key]
+            # Preserve the original placeholder for unknown keys.
+            return "{" + key + "}"
+        return super().get_value(key, args, kwargs)
+
+
+_SAFE_FORMATTER = _SafeFormatter()
+
+
+def _safe_format(text: str, variables: dict[str, Any]) -> str:
+    """Substitute ``variables`` into ``text`` without failing on missing keys.
+
+    Falls back to returning ``text`` unchanged if the string contains
+    malformed format syntax (e.g. an unmatched ``{``) so that a section is
+    never lost just because its content was not intended as a template.
+    """
+    try:
+        return _SAFE_FORMATTER.vformat(text, (), variables)
+    except (ValueError, IndexError, KeyError):
+        return text
 
 
 @dataclass
@@ -19,10 +57,7 @@ class PromptSection:
     def render(self, variables: Optional[dict[str, Any]] = None) -> str:
         text = self.content
         if variables:
-            try:
-                text = text.format_map(variables)
-            except KeyError:
-                pass
+            text = _safe_format(text, variables)
         return text
 
     def render_with_markers(self, variables: Optional[dict[str, Any]] = None) -> str:
