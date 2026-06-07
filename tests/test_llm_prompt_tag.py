@@ -1,6 +1,6 @@
 """Tests for llm-prompt-tag."""
-import pytest
-from llm_prompt_tag import TaggedPrompt, PromptSection
+
+from llm_prompt_tag import PromptSection, TaggedPrompt
 
 
 def test_add_and_render():
@@ -150,3 +150,42 @@ def test_missing_variable_passthrough():
     # missing variable should not crash
     text = p.render(variables={})
     assert "Hello" in text
+
+
+def test_render_with_markers_variables():
+    p = TaggedPrompt()
+    p.add("ctx", "Working in {language}.")
+    text = p.render_with_markers(variables={"language": "Rust"})
+    assert "<ctx>" in text
+    assert "Working in Rust." in text
+
+
+def test_as_message_variables():
+    p = TaggedPrompt()
+    p.add("ctx", "Hello, {name}!")
+    msg = p.as_message(variables={"name": "Bob"})
+    assert msg["content"] == "Hello, Bob!"
+
+
+def test_update_creates_missing_section():
+    p = TaggedPrompt()
+    p.update("new", "fresh content")
+    assert "new" in p
+    assert p.get("new").content == "fresh content"
+
+
+def test_to_dict_from_dict_preserves_separator_and_metadata():
+    p = TaggedPrompt(separator="\n###\n")
+    p.add("persona", "You are helpful.", priority=2, source="manual")
+    p.add("task", "Be brief.", priority=1)
+    restored = TaggedPrompt.from_dict(p.to_dict())
+    assert restored._separator == "\n###\n"
+    section = restored.get("persona")
+    assert section.metadata == {"source": "manual"}
+    # separator joins the two sections in the rendered output
+    assert "###" in restored.render()
+
+
+def test_get_missing_returns_none():
+    p = TaggedPrompt()
+    assert p.get("absent") is None

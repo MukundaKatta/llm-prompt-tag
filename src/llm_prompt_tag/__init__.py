@@ -1,6 +1,7 @@
 """
 llm-prompt-tag: Tag prompt sections with labels and metadata; render with markers.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -127,7 +128,10 @@ class TaggedPrompt:
         return {"role": role, "content": self.render(variables)}
 
     def to_dict(self) -> dict[str, Any]:
-        return {"sections": [s.to_dict() for s in self._sections.values()], "separator": self._separator}
+        return {
+            "sections": [s.to_dict() for s in self._sections.values()],
+            "separator": self._separator,
+        }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "TaggedPrompt":
